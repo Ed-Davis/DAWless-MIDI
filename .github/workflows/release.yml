@@ -1,0 +1,133 @@
+name: Release
+
+# Run by hand (Actions › Release › Run workflow) to build DAWless MIDI, sign
+# it with your Developer ID, have Apple notarize it, and publish the stapled
+# DMG as a GitHub release for people to download.
+#
+# Needs these repository secrets (Settings › Secrets and variables › Actions):
+#   DEVELOPER_ID_P12           base64 of a .p12 holding "Developer ID Application: …"
+#   DEVELOPER_ID_P12_PASSWORD  the password it was exported with
+#   ASC_KEY_ID, ASC_ISSUER_ID  an App Store Connect API key (Users and Access › Integrations),
+#   ASC_KEY_P8                 and the contents of its AuthKey_….p8 file (used to notarize)
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark as a pre-release (off = full release, shown as Latest)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      title: ${{ steps.meta.outputs.title }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # the build number is the commit count
+          persist-credentials: false
+
+      - name: Check the secrets are set
+        env:
+          S1: ${{ secrets.DEVELOPER_ID_P12 }}
+          S2: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          S3: ${{ secrets.ASC_KEY_ID }}
+          S4: ${{ secrets.ASC_ISSUER_ID }}
+          S5: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          missing=0
+          for v in "S1:DEVELOPER_ID_P12" "S2:DEVELOPER_ID_P12_PASSWORD" "S3:ASC_KEY_ID" "S4:ASC_ISSUER_ID" "S5:ASC_KEY_P8"; do
+            var="${v%%:*}"
+            if [ -z "${!var}" ]; then echo "::error::Secret ${v#*:} is not set"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Run tests
+        run: swift test --parallel
+
+      - name: Install the Developer ID certificate and API key
+        env:
+          P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="$(uuidgen)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          ID=$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+          [ -n "$ID" ] || { echo "::error::No Developer ID Application certificate in DEVELOPER_ID_P12"; exit 1; }
+          echo "SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+
+          KEY="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_KEY_P8" > "$KEY"
+          chmod 600 "$KEY"
+          {
+            echo "NOTARY_KEY_PATH=$KEY"
+            echo "NOTARY_KEY_ID=$ASC_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$ASC_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize and staple
+        run: ./release.sh
+
+      - name: Name the DMG
+        id: meta
+        run: |
+          VERSION="$(tr -d '[:space:]' < Packaging/VERSION)"
+          BUILD="$(git rev-list --count HEAD)"
+          mkdir -p dist
+          mv "build/DAWless MIDI.dmg" "dist/DAWless MIDI ${VERSION} (${BUILD}).dmg"
+          echo "tag=v${VERSION}-build${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "title=DAWless MIDI ${VERSION} build ${BUILD}" >> "$GITHUB_OUTPUT"
+
+      - name: Clean up
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
+      - name: Keep the DMG
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: DAWless-MIDI-notarized
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  # Publishing gets the write token but runs nothing from the repository.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: DAWless-MIDI-notarized
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          TITLE: ${{ needs.build.outputs.title }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          printf 'DAWless MIDI, signed with Developer ID and notarized by Apple, from commit %s.\n' "${GITHUB_SHA::7}" > notes.md
+          FLAGS=(--target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md --repo "$GITHUB_REPOSITORY")
+          [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease) || FLAGS+=(--latest)
+          gh release delete "$TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$TAG" dist/*.dmg "${FLAGS[@]}"
