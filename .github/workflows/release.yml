@@ -82,7 +82,16 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize and staple
-        run: ./release.sh
+        run: |
+          set -o pipefail
+          ./release.sh 2>&1 | tee release.log
+
+      - name: Report what went wrong
+        if: failure()
+        run: |
+          touch release.log
+          msg=$( { grep -hiE "error|invalid|rejected|status:|id:" release.log | grep -v "^ *$" | tail -20; echo "----- tail -----"; tail -30 release.log; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=Release failed::${msg}"
 
       - name: Name the DMG
         id: meta
