@@ -72,8 +72,20 @@ jobs:
           [ -n "$ID" ] || { echo "::error::No Developer ID Application certificate in DEVELOPER_ID_P12"; exit 1; }
           echo "SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
 
+          # Spaces or line breaks pasted with the IDs would break sign-in.
+          ASC_KEY_ID="$(printf '%s' "$ASC_KEY_ID" | tr -d ' \t\r\n')"
+          ASC_ISSUER_ID="$(printf '%s' "$ASC_ISSUER_ID" | tr -d ' \t\r\n')"
           KEY="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_KEY_P8" > "$KEY"
+          # Take the .p8 as plain text or base64-encoded, whichever was saved.
+          if printf '%s' "$ASC_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          else
+            printf '%s' "$ASC_KEY_P8" | tr -d ' \r\n' | base64 --decode > "$KEY" 2>/dev/null || true
+            grep -q "BEGIN PRIVATE KEY" "$KEY" || { echo "::error::ASC_KEY_P8 isn't a .p8 key, as text or base64"; exit 1; }
+          fi
+          # Pasting can add stray carriage returns; the key mustn't have them.
+          tr -d '\r' < "$KEY" > "$KEY.tmp" && mv "$KEY.tmp" "$KEY"
+          echo "::notice title=API key shape::Key ID ${#ASC_KEY_ID} characters (should be 10), issuer ID ${#ASC_ISSUER_ID} (should be 36), key file $(grep -c . "$KEY") lines"
           chmod 600 "$KEY"
           {
             echo "NOTARY_KEY_PATH=$KEY"
