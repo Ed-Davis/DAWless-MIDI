@@ -14,6 +14,23 @@ else
   NOTARY_ARGS=(--keychain-profile "$KEYCHAIN_PROFILE")
 fi
 
+# Checks the API key works before building. A Team key needs the issuer ID;
+# an Individual key must be used without one, so try that if the first fails.
+if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+  echo "=== Checking the notary API key ==="
+  if xcrun notarytool history "${NOTARY_ARGS[@]}" >/dev/null 2>notary-check.log; then
+    echo "Team key accepted."
+  elif xcrun notarytool history --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" >/dev/null 2>>notary-check.log; then
+    echo "Individual key accepted (no issuer ID)."
+    NOTARY_ARGS=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID")
+  else
+    cat notary-check.log
+    echo "✗ ERROR: Apple's notary service didn't accept the API key, with or without the issuer ID."
+    exit 1
+  fi
+  rm -f notary-check.log
+fi
+
 echo "=== Building release and assembling .app ==="
 source Packaging/assemble-app.sh
 
