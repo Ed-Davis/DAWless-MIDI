@@ -11,30 +11,46 @@ public struct ClockTimeline: Sendable {
     public static let maxLag = 0.05
 
     public private(set) var bpm: Double
-    public private(set) var nextTick: Double
+    /// Ticks are worked out from an anchor (anchor + n × interval) rather
+    /// than by adding the interval over and over, so they can't drift.
+    private var anchor: Double
+    private var count = 0
     /// The last tick handed out, so a restart never lands before it.
     public private(set) var lastTick: Double?
 
     public init(bpm: Double, startingAt time: Double) {
         self.bpm = Self.clamp(bpm)
-        self.nextTick = time
+        self.anchor = time
     }
 
     public var interval: Double { 60 / (bpm * Self.ticksPerQuarter) }
 
-    public mutating func setBPM(_ value: Double) { bpm = Self.clamp(value) }
+    /// When the next tick is due.
+    public var nextTick: Double { anchor + Double(count) * interval }
+
+    /// Changes tempo from the next tick on.
+    public mutating func setBPM(_ value: Double) {
+        let next = nextTick
+        bpm = Self.clamp(value)
+        anchor = next
+        count = 0
+    }
 
     /// Starts the grid again from `time` (on Start, the first tick goes with it).
-    public mutating func restart(at time: Double) { nextTick = time }
+    public mutating func restart(at time: Double) {
+        anchor = time
+        count = 0
+    }
 
     /// The ticks due up to and including `horizon`, in order.
     public mutating func ticks(through horizon: Double, now: Double) -> [Double] {
-        if nextTick < now - Self.maxLag { nextTick = now }
+        if nextTick < now - Self.maxLag { restart(at: now) }
         var out: [Double] = []
         while nextTick <= horizon {
-            out.append(nextTick)
-            lastTick = nextTick
-            nextTick += interval
+            let t = nextTick
+            out.append(t)
+            lastTick = t
+            count += 1
         }
         return out
     }

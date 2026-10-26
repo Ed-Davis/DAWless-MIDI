@@ -117,8 +117,9 @@ final class PatchTests: XCTestCase {
 final class ClockMathsTests: XCTestCase {
     func testTicksAt120() {
         var t = ClockTimeline(bpm: 120, startingAt: 10)
-        let ticks = t.ticks(through: 10.5, now: 10)
+        let ticks = t.ticks(through: 10.5 + 1e-9, now: 10)
         XCTAssertEqual(ticks.count, 25)              // a beat is 0.5 s: 24 intervals, 25 ticks
+        XCTAssertEqual(ticks.last!, 10.5, accuracy: 1e-9)
         XCTAssertEqual(ticks[1] - ticks[0], 0.5 / 24, accuracy: 1e-9)
         XCTAssertTrue(t.ticks(through: 10.5, now: 10.4).isEmpty, "no tick is handed out twice")
     }
@@ -144,6 +145,20 @@ final class ClockMathsTests: XCTestCase {
         _ = t.ticks(through: 0.015, now: 0)
         let at = t.earliestEvent(now: 0, leadTime: 0.005)
         XCTAssertGreaterThan(at, t.lastTick!)
+    }
+
+    func testNoDriftOverAnHour() {
+        var t = ClockTimeline(bpm: 133, startingAt: 50_000)
+        var last = 0.0
+        var n = 0
+        var now = 50_000.0
+        while now < 53_600 {
+            let ticks = t.ticks(through: now + 0.015, now: now)
+            n += ticks.count
+            last = ticks.last ?? last
+            now += 0.0075
+        }
+        XCTAssertEqual(last, 50_000 + Double(n - 1) * 60 / (133 * 24), accuracy: 1e-6)
     }
 
     func testTempoMeter() {
