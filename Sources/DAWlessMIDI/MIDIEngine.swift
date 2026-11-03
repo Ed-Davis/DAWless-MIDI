@@ -308,7 +308,7 @@ final class MIDIEngine: @unchecked Sendable {
             guard let base = buffer.baseAddress else { ok = false; return }
             var index = 0
             while index + 2 <= buffer.count {
-                let next = MIDIEventListAdd(list, byteSize, packet, 0, 2, base + index)
+                let next: UnsafeMutablePointer<MIDIEventPacket>? = MIDIEventListAdd(list, byteSize, packet, 0, 2, base + index)
                 guard let next else { ok = false; return }
                 packet = next
                 index += 2

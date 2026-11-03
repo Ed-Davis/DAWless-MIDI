@@ -312,8 +312,8 @@ final class MonitorModel: ObservableObject {
             return
         }
         let channel = UInt8(testChannel & 0x0F)
-        let ons = Self.testChord.flatMap { [0x90 | channel, $0, 127] }
-        let offs = Self.testChord.flatMap { [0x80 | channel, $0, 0] }
+        let ons: [UInt8] = Self.testChord.flatMap { note -> [UInt8] in [0x90 | channel, note, 127] }
+        let offs: [UInt8] = Self.testChord.flatMap { note -> [UInt8] in [0x80 | channel, note, 0] }
         engine.sendNow(ons, to: dest.ref, device: dest.device)
         testNoteSounding = true
         let names = Self.testChord.map { MIDIDescriber.noteName($0, middleCOctave: middleCOctave) }.joined(separator: " ")
