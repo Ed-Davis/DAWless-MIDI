@@ -78,7 +78,7 @@ struct FocusMenu: View {
 // MARK: - Channel tiles
 
 struct ChannelTiles: View {
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 8)
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 6)]
 
     var body: some View {
         VStack(spacing: 6) {

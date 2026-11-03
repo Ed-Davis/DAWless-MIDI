@@ -13,8 +13,8 @@ struct Patchbay: View {
 
     static let pitch: CGFloat = 20
     static let labelWidth: CGFloat = 176
-    static let nameLength: CGFloat = 112
-    static let headerHeight: CGFloat = 136
+    static let nameLength: CGFloat = 132
+    static let headerHeight: CGFloat = 156
     static let boardPad: CGFloat = 9
     static let clockGap: CGFloat = 12
     static let labelGap: CGFloat = 6

@@ -106,9 +106,14 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView([.horizontal, .vertical]) {
-                Patchbay()
-                    .screenshotAnchor("patchbay")
+            // A two-way scroll view centres anything smaller than itself;
+            // keep the patchbay at the top left.
+            GeometryReader { geo in
+                ScrollView([.horizontal, .vertical]) {
+                    Patchbay()
+                        .screenshotAnchor("patchbay")
+                        .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
+                }
             }
         }
     }
