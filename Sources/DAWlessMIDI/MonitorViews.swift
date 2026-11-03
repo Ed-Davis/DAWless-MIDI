@@ -78,7 +78,7 @@ struct FocusMenu: View {
 // MARK: - Channel tiles
 
 struct ChannelTiles: View {
-    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+    private let columns = Array(repeating: GridItem(.flexible(minimum: 60), spacing: 6), count: 8)
 
     var body: some View {
         VStack(spacing: 6) {
@@ -141,7 +141,11 @@ struct SlotTile: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Lamp(lit: monitor.activeSlots.contains(slot), colour: lampColour)
-                    Legend(slot.shortTitle, size: 9.5, colour: VCS3.legend)
+                    Text(slot.shortTitle)
+                        .font(VCS3.legendFont(9.5, weight: .bold))
+                        .foregroundStyle(VCS3.legend)
+                        .fixedSize()
+                        .layoutPriority(1)
                     Spacer(minLength: 2)
                     Text("\(monitor.stats[slot]?.count ?? 0)")
                         .font(VCS3.mono(9))
