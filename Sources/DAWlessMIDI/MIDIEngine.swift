@@ -10,6 +10,23 @@ struct Endpoint: Hashable, Identifiable {
     var name: String { device.name }
 }
 
+/// A complete message as it arrived, before the monitor numbers it.
+struct RawMIDIEvent {
+    let time: Date
+    let sourceID: Int32
+    let sourceName: String
+    let bytes: [UInt8]
+}
+
+/// What Core MIDI says about where an endpoint comes from.
+struct EndpointDetails {
+    var portName: String?
+    var deviceName: String?
+    var manufacturer: String?
+    var model: String?
+    var isVirtual = false
+}
+
 /// Mach host time, in seconds and back.
 enum HostTime {
     private static let timebase: mach_timebase_info_data_t = {
@@ -59,6 +76,11 @@ final class MIDIEngine: @unchecked Sendable {
     private let activityLock = NSLock()
     private var inActivity: [DeviceID: Double] = [:]
     private var outActivity: [DeviceID: Double] = [:]
+
+    /// Everything received, waiting for the monitor to collect it.
+    private let monitorLock = NSLock()
+    private var monitorQueue: [RawMIDIEvent] = []
+    private static let maxMonitorQueue = 100_000
 
     /// Called on the main thread when devices come or go.
     var onDevicesChanged: (() -> Void)?
@@ -199,6 +221,7 @@ final class MIDIEngine: @unchecked Sendable {
 
         guard !messages.isEmpty else { return }
         noteActivity(in: device)
+        queueForMonitor(messages.map(\.0), from: device)
         let outs = table.routes[device.uniqueID] ?? []
         for (message, ts) in messages {
             if MessageKind.of(message) == .clock {
@@ -260,6 +283,89 @@ final class MIDIEngine: @unchecked Sendable {
                 send([0xB0 | ch, 64, 0, 0xB0 | ch, 123, 0, 0xB0 | ch, 120, 0], to: d.ref, device: d.device, at: 0)
             }
         }
+    }
+
+    /// Sends one message straight away (the test chord, say).
+    func sendNow(_ bytes: [UInt8], to ref: MIDIEndpointRef, device: DeviceID) {
+        send(bytes, to: ref, device: device, at: 0)
+    }
+
+    /// Sends ready-made SysEx7 Universal MIDI Packets, two words each. Large
+    /// SysEx goes this way so it can be paced at MIDI cable speed.
+    @discardableResult
+    func sendSysExWords(_ words: ArraySlice<UInt32>, to ref: MIDIEndpointRef, device: DeviceID) -> OSStatus {
+        let wordArray = Array(words)
+        guard wordArray.count >= 2 else { return noErr }
+        let packetCount = wordArray.count / 2
+        let byteSize = MemoryLayout<MIDIEventList>.size + packetCount * 32 + 64
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: byteSize, alignment: 16)
+        defer { raw.deallocate() }
+        raw.initializeMemory(as: UInt8.self, repeating: 0, count: byteSize)
+        let list = raw.bindMemory(to: MIDIEventList.self, capacity: 1)
+        var packet: UnsafeMutablePointer<MIDIEventPacket> = MIDIEventListInit(list, ._1_0)
+        var ok = true
+        wordArray.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { ok = false; return }
+            var index = 0
+            while index + 2 <= buffer.count {
+                let next = MIDIEventListAdd(list, byteSize, packet, 0, 2, base + index)
+                guard let next else { ok = false; return }
+                packet = next
+                index += 2
+            }
+        }
+        guard ok else { return OSStatus(kMIDIMessageSendErr) }
+        let status = MIDISendEventList(outPort, ref, list)
+        noteActivity(out: device)
+        return status
+    }
+
+    // MARK: Monitor
+
+    private func queueForMonitor(_ messages: [[UInt8]], from device: DeviceID) {
+        let now = Date()
+        monitorLock.lock()
+        for m in messages where monitorQueue.count < Self.maxMonitorQueue {
+            monitorQueue.append(RawMIDIEvent(time: now, sourceID: device.uniqueID, sourceName: device.name, bytes: m))
+        }
+        monitorLock.unlock()
+    }
+
+    /// Hands over everything received since the last call.
+    func drainMonitor() -> [RawMIDIEvent] {
+        monitorLock.lock()
+        defer { monitorLock.unlock() }
+        guard !monitorQueue.isEmpty else { return [] }
+        let out = monitorQueue
+        monitorQueue.removeAll(keepingCapacity: true)
+        return out
+    }
+
+    /// The device, maker and model behind an endpoint, for the MIDI Sources window.
+    static func details(_ ref: MIDIEndpointRef) -> EndpointDetails {
+        var d = EndpointDetails()
+        guard ref != 0 else { return d }
+        d.portName = string(ref, kMIDIPropertyName)
+        d.manufacturer = string(ref, kMIDIPropertyManufacturer)
+        d.model = string(ref, kMIDIPropertyModel)
+        var entity = MIDIEntityRef()
+        var device = MIDIDeviceRef()
+        if MIDIEndpointGetEntity(ref, &entity) == noErr, entity != 0,
+           MIDIEntityGetDevice(entity, &device) == noErr, device != 0 {
+            d.deviceName = string(device, kMIDIPropertyName)
+            if d.manufacturer == nil { d.manufacturer = string(device, kMIDIPropertyManufacturer) }
+            if d.model == nil { d.model = string(device, kMIDIPropertyModel) }
+        } else {
+            d.isVirtual = true
+        }
+        return d
+    }
+
+    private static func string(_ object: MIDIObjectRef, _ key: CFString) -> String? {
+        var value: Unmanaged<CFString>?
+        guard MIDIObjectGetStringProperty(object, key, &value) == noErr, let s = value?.takeRetainedValue() else { return nil }
+        let str = (s as String).trimmingCharacters(in: .whitespaces)
+        return str.isEmpty ? nil : str
     }
 
     // MARK: What the window shows

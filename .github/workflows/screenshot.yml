@@ -1,0 +1,63 @@
+name: Screenshot
+
+on:
+  push:
+    branches: [ '**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commits the updated screenshot
+
+jobs:
+  screenshot:
+    runs-on: macos-15
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Build
+      run: |
+        set -o pipefail
+        swift build -c release 2>&1 | tee build.log
+
+    - name: Report build errors
+      if: failure()
+      run: |
+        touch build.log
+        msg=$(grep -hE "error:" build.log | sort -u | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+        echo "::error title=Build failed::${msg}"
+
+    - name: Take screenshot
+      run: |
+        BIN="$(swift build -c release --show-bin-path)"
+        OUT="$PWD/docs/screenshots"
+        rm -rf "$OUT.new"
+        "$BIN/DAWlessMIDI" --screenshot "$OUT.new" &
+        PID=$!
+        for i in $(seq 1 120); do
+          [ -f "$OUT.new/.done" ] && break
+          kill -0 $PID 2>/dev/null || break
+          sleep 1
+        done
+        kill $PID 2>/dev/null || true
+        if [ -f "$OUT.new/.done" ]; then
+          rm -f "$OUT.new/.done"
+          rm -rf "$OUT" && mv "$OUT.new" "$OUT"
+          ls -la "$OUT"
+        else
+          echo "::warning::The screenshot wasn't taken; keeping the old one."
+          rm -rf "$OUT.new"
+        fi
+
+    - name: Commit screenshot
+      if: github.event_name == 'push'
+      run: |
+        git add docs/screenshots
+        if git diff --cached --quiet; then
+          echo "Screenshot unchanged."
+        else
+          git config user.name "github-actions[bot]"
+          git config user.email "41898281+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update screenshot [skip ci]"
+          git push || echo "::warning::Couldn't push the screenshot (the branch moved on)."
+        fi

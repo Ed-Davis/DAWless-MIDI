@@ -10,11 +10,21 @@ struct DAWlessMIDIApp: App {
         Window("DAWless MIDI", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(minWidth: 560, minHeight: 360)
+                .environmentObject(model.monitor)
+                .frame(minWidth: 1000, minHeight: 640)
+                .task {
+                    if Screenshot.isActive { await Screenshot.run(model: model) }
+                }
         }
-        .defaultSize(width: 860, height: 520)
+        .defaultSize(width: 1360, height: 860)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .newItem) {
+                Button("Open SysEx File…") { model.monitor.openSysExFile() }
+                    .keyboardShortcut("o")
+                Button("Export Log…") { model.monitor.exportLog() }
+                    .keyboardShortcut("e")
+            }
             CommandGroup(replacing: .appInfo) {
                 Button("About DAWless MIDI") { AppInfo.showAbout() }
             }
@@ -38,7 +48,14 @@ struct DAWlessMIDIApp: App {
                 Button("All Notes Off") { model.panic() }
                     .keyboardShortcut(".", modifiers: .command)
             }
+            MonitorCommands(monitor: model.monitor)
         }
+
+        Window("MIDI Sources", id: "sources") {
+            SourcesView()
+                .environmentObject(model.monitor)
+        }
+        .defaultSize(width: 620, height: 440)
 
         // Stays in the menu bar while the window's closed, so the routing
         // keeps running in the background.
@@ -51,7 +68,42 @@ struct DAWlessMIDIApp: App {
     }
 }
 
+/// The Monitor menu, from MIDI Flicker.
+struct MonitorCommands: Commands {
+    @ObservedObject var monitor: MonitorModel
+
+    var body: some Commands {
+        CommandMenu("Monitor") {
+            Button(monitor.paused ? "Resume Log" : "Pause Log") { monitor.paused.toggle() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            Button("Clear Log") { monitor.clear() }
+                .keyboardShortcut("k")
+            Divider()
+            Button("Show All Channels") { monitor.selectedSlot = nil }
+                .keyboardShortcut("0")
+            Button("Show System") { monitor.selectedSlot = .system }
+            Button("Show SysEx") { monitor.selectedSlot = .sysex }
+            Divider()
+            Button("Monitor All Inputs") { monitor.focusSourceID = nil }
+                .disabled(monitor.focusSourceID == nil)
+            Divider()
+            Button(monitor.isRecording ? "Stop Recording SysEx" : "Record SysEx") { monitor.isRecording.toggle() }
+                .keyboardShortcut("r")
+            Button("Send Test Chord") { monitor.sendTestChord() }
+                .disabled(monitor.testDestinationID == nil)
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if Screenshot.isActive {
+            // Run as a bare executable on the build machine: show a normal window.
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
     /// Closing the window doesn't stop the routing: the app carries on in the menu bar.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
@@ -99,7 +151,7 @@ enum AppInfo {
             .applicationName: "DAWless MIDI",
             .applicationVersion: version,
             .version: "build \(build)",
-            .credits: NSAttributedString(string: "MIDI routing and clock for playing without a DAW, \(credit).",
+            .credits: NSAttributedString(string: "MIDI routing, clock and monitoring for playing without a DAW, \(credit).",
                                          attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]),
             NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): copyright,
         ])
